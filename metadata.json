@@ -1,0 +1,6 @@
+{
+  "name": "Winvest - AI-Driven Wealth & Investment Platform",
+  "description": "Next-generation AI-powered crypto investment platform offering automated trading algorithms, daily yield tracking, real-time analytics, profit calculations, and corporate share certification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
