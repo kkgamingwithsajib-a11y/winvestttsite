@@ -351,6 +351,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       setBalanceAdjustTarget(null);
       showNotification(`Balance updated to $${newBal.toFixed(2)}.`);
       fetchAllAdminData();
+      if (onRefreshPublicData) onRefreshPublicData();
     } catch (err: any) {
       showNotification(err.message, 'error');
     }

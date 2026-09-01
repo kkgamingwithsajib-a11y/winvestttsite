@@ -812,29 +812,44 @@ function ensureUserTransactions(user: UserAccount) {
   if (!user.withdrawals) user.withdrawals = [];
 }
 
+// Helper to calculate continuous real-time yield accrual
+function recalculateUserYield(user: any) {
+  if (!user || !user.deposits || !Array.isArray(user.deposits)) return;
+  const now = Date.now();
+
+  let totalNewYield = 0;
+  user.deposits.forEach((dep: any) => {
+    if (dep.status === 'approved' || dep.status === 'active') {
+      const startTime = dep._lastYieldCalcTime || (dep.processedAt ? new Date(dep.processedAt).getTime() : now);
+      const elapsedSeconds = Math.max(0, (now - startTime) / 1000);
+
+      if (elapsedSeconds > 0) {
+        const dailyPercent = dep.dailyYieldPercent || 3.0;
+        const profitGained = (dep.amountUsd * (dailyPercent / 100) / 86400) * elapsedSeconds;
+
+        if (profitGained > 0) {
+          dep.earnedSoFarUsd = Number(((dep.earnedSoFarUsd || 0) + profitGained).toFixed(6));
+          totalNewYield += profitGained;
+        }
+      }
+      dep._lastYieldCalcTime = now;
+
+      const initTime = new Date(dep.processedAt || dep.startDate || user.joinedDate || now).getTime();
+      dep.daysActive = Math.min(dep.totalDays || 60, Math.floor((now - initTime) / (1000 * 60 * 60 * 24)));
+    }
+  });
+
+  if (totalNewYield > 0) {
+    user.totalEarnedUsd = Number(((user.totalEarnedUsd || 0) + totalNewYield).toFixed(4));
+    user.walletBalanceUsd = Number(((user.walletBalanceUsd || 0) + totalNewYield).toFixed(4));
+  }
+}
+
 // Get current logged-in user profile
 app.get('/api/auth/me', authenticateUser, (req, res) => {
   const user = (req as any).user;
   ensureUserTransactions(user);
-
-  // Server-side auto-accrual based on elapsed time since last sync/login
-  const now = Date.now();
-  const lastSync = (user as any)._lastSyncTime || new Date(user.lastLogin || now).getTime();
-  const hoursElapsed = (now - lastSync) / (1000 * 60 * 60);
-  if (hoursElapsed > 0.0001 && user.deposits && user.deposits.some((d: any) => d.status === 'active')) {
-    let earnedIncrement = 0;
-    user.deposits.forEach((d: any) => {
-      if (d.status === 'active') {
-        const hourlyRate = (d.amountUsd * (d.dailyYieldPercent || 3.0) / 100) / 24;
-        earnedIncrement += hourlyRate * hoursElapsed;
-      }
-    });
-    if (earnedIncrement > 0) {
-      user.totalEarnedUsd = Number(((user.totalEarnedUsd || 0) + earnedIncrement).toFixed(4));
-      user.walletBalanceUsd = Number(((user.walletBalanceUsd || 0) + earnedIncrement).toFixed(4));
-    }
-  }
-  (user as any)._lastSyncTime = now;
+  recalculateUserYield(user);
   saveDatabase(db);
 
   const { passwordHash: _, ...safeProfile } = user;
@@ -844,12 +859,10 @@ app.get('/api/auth/me', authenticateUser, (req, res) => {
 // User sync earnings / state
 app.put('/api/user/sync', authenticateUser, (req, res) => {
   const user = (req as any).user;
-  const { walletBalanceUsd, totalEarnedUsd, deposits } = req.body;
-  if (walletBalanceUsd !== undefined) user.walletBalanceUsd = Number(walletBalanceUsd);
-  if (totalEarnedUsd !== undefined) user.totalEarnedUsd = Number(totalEarnedUsd);
-  if (Array.isArray(deposits)) user.deposits = deposits;
-  (user as any)._lastSyncTime = Date.now();
+  ensureUserTransactions(user);
+  recalculateUserYield(user);
   saveDatabase(db);
+
   const { passwordHash: _, ...safeProfile } = user;
   res.json({ message: 'Synced successfully', user: safeProfile });
 });
@@ -1500,10 +1513,11 @@ app.get('/api/admin/users', authenticateAdmin, (req, res) => {
   const { search, role, status } = req.query;
   
   let list = db.users.map((u) => {
+    recalculateUserYield(u);
     const { passwordHash: _, ...safeUser } = u;
     return {
       ...safeUser,
-      activeContractsCount: u.deposits.filter((d) => d.status === 'active').length
+      activeContractsCount: u.deposits.filter((d) => d.status === 'active' || d.status === 'approved').length
     };
   });
 
@@ -1672,9 +1686,10 @@ app.post('/api/admin/deposits/:id/approve', authenticateAdmin, (req, res) => {
     // Check if user has this deposit in their list
     const userDep = user.deposits.find((d) => d.id === depositId);
     if (userDep) {
-      userDep.status = 'active';
+      userDep.status = 'approved';
       userDep.adminNote = adminNote;
       userDep.processedAt = new Date().toISOString();
+      (userDep as any)._lastYieldCalcTime = Date.now();
     } else {
       user.deposits.unshift({
         id: deposit.id,
@@ -1687,10 +1702,11 @@ app.post('/api/admin/deposits/:id/approve', authenticateAdmin, (req, res) => {
         daysActive: 0,
         totalDays: db.settings.contractDurationDays || 60,
         earnedSoFarUsd: 0,
-        status: 'active',
+        status: 'approved',
         txHash: deposit.txHash,
-        adminNote: adminNote
-      });
+        adminNote: adminNote,
+        _lastYieldCalcTime: Date.now()
+      } as any);
     }
   }
 

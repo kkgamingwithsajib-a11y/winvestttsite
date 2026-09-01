@@ -107,7 +107,7 @@ export interface UserDeposit {
   daysActive: number;
   totalDays: number;
   earnedSoFarUsd: number;
-  status: 'pending' | 'active' | 'completed' | 'rejected';
+  status: 'pending' | 'approved' | 'active' | 'completed' | 'rejected';
   txHash: string;
   paymentMethodId?: string;
   adminNote?: string;

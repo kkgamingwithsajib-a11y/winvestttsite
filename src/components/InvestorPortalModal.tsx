@@ -92,56 +92,49 @@ export const InvestorPortalModal: React.FC<InvestorPortalModalProps> = ({
     }
   }, [initialDepositAmount]);
 
-  // Live polling and micro-yield ticker & backend sync
+  // Live polling for user status from backend and real-time yield accrual counter
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !userToken) return;
 
-    let syncCounter = 0;
-    // Poll server for latest user status (admin deposit approvals, etc.) and sync balance
     const pollInterval = setInterval(() => {
-      if (userToken) {
-        syncCounter++;
-        // Every 3rd poll (approx 12s), persist current accumulated frontend balance to backend
-        if (syncCounter % 3 === 0 && userAccount) {
-          api.syncUser(userToken, {
-            walletBalanceUsd: userAccount.walletBalanceUsd,
-            totalEarnedUsd: userAccount.totalEarnedUsd,
-            deposits: userAccount.deposits
-          }).catch(() => {});
-        }
-
-        api.getMe(userToken)
-          .then((u) => {
+      api.getMe(userToken)
+        .then((u) => {
+          if (u) {
             onUpdateAccount({ ...u, isLoggedIn: true });
-          })
-          .catch(() => {});
-      }
-    }, 4000);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
 
+    // Continuous smooth visual profit accrual ticker for active yield contracts
     const deposits = userAccount?.deposits || [];
-    const activeDeposits = deposits.filter(d => d.status === 'active');
-    if (activeDeposits.length === 0) {
-      return () => clearInterval(pollInterval);
+    const activeDeposits = deposits.filter((d) => d.status === 'approved' || d.status === 'active');
+    
+    let tickerInterval: any = null;
+    if (activeDeposits.length > 0) {
+      tickerInterval = setInterval(() => {
+        let profitStep = 0;
+        activeDeposits.forEach((dep) => {
+          const dailyPercent = dep.dailyYieldPercent || 3.0;
+          // 1 second profit = (amount * (dailyPercent / 100)) / 86400
+          profitStep += (dep.amountUsd * (dailyPercent / 100)) / 86400;
+        });
+
+        if (profitStep > 0 && userAccount) {
+          onUpdateAccount({
+            ...userAccount,
+            totalEarnedUsd: Number(((userAccount.totalEarnedUsd || 0) + profitStep).toFixed(4)),
+            walletBalanceUsd: Number(((userAccount.walletBalanceUsd || 0) + profitStep).toFixed(4))
+          });
+        }
+      }, 1000);
     }
-
-    const yieldInterval = setInterval(() => {
-      const activeTotal = activeDeposits.reduce((acc, dep) => acc + (dep.amountUsd || 0), 0);
-      if (activeTotal <= 0) return;
-
-      const microEarning = (activeTotal * (platformConfig?.dailyYieldRatePercent || 3.0) / 100) / (24 * 3600) * 2;
-
-      onUpdateAccount({
-        ...userAccount,
-        walletBalanceUsd: Number(((userAccount?.walletBalanceUsd || 0) + microEarning).toFixed(4)),
-        totalEarnedUsd: Number(((userAccount?.totalEarnedUsd || 0) + microEarning).toFixed(4)),
-      });
-    }, 2000);
 
     return () => {
       clearInterval(pollInterval);
-      clearInterval(yieldInterval);
+      if (tickerInterval) clearInterval(tickerInterval);
     };
-  }, [isOpen, userAccount?.walletBalanceUsd, userAccount?.totalEarnedUsd, platformConfig, onUpdateAccount, userToken]);
+  }, [isOpen, userToken, onUpdateAccount, userAccount?.deposits]);
 
   const handleModalClose = () => {
     if (userToken && userAccount) {
@@ -735,7 +728,6 @@ export const InvestorPortalModal: React.FC<InvestorPortalModalProps> = ({
                   <input
                     type="number"
                     min={platformConfig?.minWithdrawalUsd || 10}
-                    max={userAccount.walletBalanceUsd}
                     value={withdrawAmount}
                     onChange={(e) => setWithdrawAmount(Number(e.target.value))}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white font-bold focus:border-emerald-500 focus:outline-none"
@@ -770,8 +762,8 @@ export const InvestorPortalModal: React.FC<InvestorPortalModalProps> = ({
 
                 <button
                   type="submit"
-                  disabled={withdrawSubmitting || userAccount.walletBalanceUsd <= 0}
-                  className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2"
+                  disabled={withdrawSubmitting}
+                  className="w-full py-3.5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                 >
                   {withdrawSubmitting ? (
                     <>
